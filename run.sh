@@ -10,7 +10,7 @@ java -cp /usr/share/java/org-openide-util-lookup.jar:.:gephi-toolkit-0.8.7-all/g
 cd ..
 
 
-mv network-processed.gexf $WEBSITE_DIR
+mv network-processed.gexf $WEBSITE_DIR/network-processed.gexf.xml
 echo $(date +"%s") > $WEBSITE_DIR/update-time
 
 rm network.gexf
