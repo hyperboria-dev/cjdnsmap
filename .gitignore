@@ -1,0 +1,6 @@
+*.pyc
+*.class
+*.gexf
+update-time
+.cache/
+gephi-toolkit-*

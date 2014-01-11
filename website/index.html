@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="UTF-8">
+		<title>Randati's Hyperboria Map</title>
+		<script src="sigma.min.js"></script>
+		<script src="sigma.parseGexf.js"></script>
+		<script src="jquery-2.0.3.min.js"></script>
+		<style type="text/css">
+			* {
+				margin: 0;
+				padding: 0;
+			}
+			html, body {
+				width: 100%;
+				height: 100%;
+				margin: 0;
+				padding: 0;
+				background: #333;
+			}
+
+			#general-info {
+				position: absolute;
+				top: 0;
+				left: 0;
+				color: #FFF;
+				font-family: Verdana;
+				font-size: 10px;
+				padding: 5px;
+				line-height: 150%;
+				z-index: 999;
+			}
+
+
+			#sidebar {
+
+				padding: 20px 20px;
+				background: rgba(0, 0, 0, 0.7);
+				color: #fff;
+				position: absolute;
+				top: 0;
+				right: 0;
+				bottom: 0;
+				z-index: 999;
+				overflow-y: scroll;
+				font-size: 12px;
+				
+				font-family: 'Source Code Pro', Consolas, monospace;
+			}
+
+			a {
+				color: #FFF;
+				text-decoration: none;
+			}
+			a:hover {
+				color: #AAA;
+			}
+
+			h2 {
+				font-family: 'Verdana';
+				text-align: center;
+				margin-bottom: 5px;
+				color: #29BBFF;
+			}
+
+			#node-info {
+				//text-align: center;
+			}
+
+			#node-info > div {
+
+				padding-left: 20px;
+			}
+
+			strong {
+				font-family: 'Verdana';
+				color: #29BBFF;
+				letter-spacing: 1px;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="general-info">
+			Updated every 10 minutes.<br>
+			Last time <span id="update-time">---</span>.<br>
+			<br>	
+			Number of nodes: <span id="number-of-nodes">-</span>
+		</div>
+		<div id="sidebar">
+			<div id="node-info"></div>
+		</div>
+		<div id="map" style="width:100%; height:100%"></div>
+
+		<script>
+			var sigInst = null;
+			var nodeCount = 0;
+
+			$(document).ready(function() {
+				$.ajax({
+					url : 'update-time',
+					dataType: 'text',
+					success : function (data) {
+						var delta = Math.round(new Date().getTime() / 1000) - data;
+						var min = Math.floor(delta / 60);
+						var sec = delta % 60;
+						$('#update-time').text(min + ' min, ' + sec + ' s ago');
+					}
+				});
+
+				sigInst = sigma.init($('#map')[0]).drawingProperties({
+					labelColor: 'node',
+					labelThreshold: 5,
+					defaultEdgeType: 'curve',
+					defaultEdgeColor: 'rgba(255, 255, 255, 0.1)',
+					edgeColor: 'default'
+				}).graphProperties({
+					minNodeSize: 3,
+					maxNodeSize: 25,
+					minEdgeSize: 2,
+					maxEdgeSize: 2
+				});
+
+				sigInst.parseGexf('network-processed.gexf');
+				searchNeighbors();
+
+				
+
+				sigInst.bind('overnodes', mouseInNode);
+				sigInst.bind('outnodes', mouseOutNode);
+
+
+
+				var hitNode = false;
+				var mousePos = {};
+
+				sigInst.bind('downnodes', function(e) {
+					hitNode = e.content[0];
+				});
+				
+
+				sigInst.bind('downgraph', function(e) {
+					mousePos = e.target.getMouse();
+					hitNode = false;
+				});
+
+				sigInst.bind('upgraph', function(e) {
+					var m = e.target.getMouse();
+					var mouseMoved =
+						Math.abs(mousePos.mouseX - m.mouseX) +
+					    Math.abs(mousePos.mouseY - m.mouseY) > 3
+
+					if (!mouseMoved) {
+						if (hitNode) {
+							selectNode(hitNode);
+						}
+						else {
+							clearNodes();
+						}
+					}
+				});
+
+
+
+				sigInst.draw();
+
+				if (window.location.hash) {
+					var id = window.location.hash.substring(1);
+					selectNode(id);
+				}
+
+
+				$(document).on('click', '#node-info a', function(e) {
+					var id = e.target.hash.substring(1);
+					selectNode(id);
+				});
+			});
+
+
+
+			function mouseInNode(event) {
+				$('body').css('cursor', 'pointer');
+
+				var node = getNode(event.content[0]);
+				// showNodeInfo(node);
+				/*
+				sigInst.iterNodes(function(n) {
+					if (!(n.id in node.attr.neighbors)) {
+						n.color = 'rgba(255, 255, 255, 0.1)';
+					}
+				});
+				*/
+				sigInst.iterEdges(function(e) {
+					if ((node.id === e.source || node.id === e.target)) {
+						e.color = '#FFFFFF';
+					}
+				});
+
+				sigInst.draw(2, 2, 2);
+			}
+
+			function mouseOutNode(event) {
+				$('body').css('cursor', 'auto');
+				// sigInst.iterNodes(function(n) {
+				// 	n.color = n.attr.realColor;
+				// 	n.attr.depth = 0xFFFF;
+				// });
+
+				sigInst.iterEdges(function(e) {
+					e.color = e.attr.realColor;
+				});
+
+				sigInst.draw(2, 2, 2);
+			}
+
+			function clearNodes() {
+				window.location.hash = '';
+
+				sigInst.iterNodes(function(n) {
+					n.color = n.attr.realColor;
+					n.attr.depth = 0xFFFF;
+				});
+				sigInst.draw(2, 2, 2);
+			}
+
+
+
+			function selectNode(id) {
+				clearNodes();
+
+				window.location.hash = '#' + id;
+				var node = getNode(id);
+
+				if (!node) {
+					window.location.hash = '';
+					sigInst.draw();
+					return;
+				}
+
+				
+				showNodeInfo(node);
+
+
+				
+				
+				markNeighbors(node, 0);
+
+				sigInst.iterNodes(function(n) {
+					n.color = '#FFFFFF';
+				}, [id]);
+				
+				sigInst.draw(2, 2, 2);
+			}
+
+			function markNeighbors(node, depth) {
+				var colors = ['#FF00FF', '#29BBFF', '#17FF54', '#FFBD0F', '#FF3C14', '#590409'];
+
+				node.attr.depth = depth;
+
+				if (depth > colors.length)
+					node.color = '#000000';
+				else
+					node.color = colors[depth];
+
+				sigInst.iterNodes(function(n) {
+					//console.log(n.attr.depth, depth);
+					if (n.attr.depth > depth + 1)
+						markNeighbors(n, depth + 1);
+				}, node.attr.neighbors);
+			}
+
+
+			function searchNeighbors() {
+				sigInst.iterNodes(function(node) {
+					node.attr.realColor = node.color;
+					node.attr.depth = 0xFFFF;
+					nodeCount++;
+				});
+
+				$('#number-of-nodes').text(nodeCount);
+
+				sigInst.iterEdges(function(edge) {
+					//edge.color = "#FFF";
+					edge.attr.realColor = edge.color;
+				});
+
+
+				sigInst.iterNodes(function(node) {
+					var neighbors = {};
+					sigInst.iterEdges(function(edge) {
+						if (node.id === edge.source)
+							neighbors[edge.target] = true;
+						else if (node.id === edge.target) 
+							neighbors[edge.source] = true;
+					});
+					node.attr.neighbors = Object.keys(neighbors);
+				});
+			}
+
+
+			function getNode(ip) {
+				var node;
+				try {
+					sigInst.iterNodes(function(n) {
+						node = n;
+					}, [ip]);
+				} catch (err) {
+					return null;
+				}
+				return node;
+			}
+
+			function showNodeInfo(node) {
+				var attr = node['attr']['attributes'];
+
+				var name = node.label;
+				var ip = attr[0]['val'];
+				var version = attr[1]['val'];
+				var connections = attr[2]['val'];
+				var active_connections = attr[3]['val'];
+
+
+				var neighbors = node.attr.neighbors.map(function (id) { return getNode(id); });
+
+				var dns_neighbors = [];
+				var ip_neighbors = [];
+
+				for (var i = 0; i < neighbors.length; ++i) {
+					var n = neighbors[i];
+					if (/^[0-9A-F]{4}$/i.test(n.label))
+						ip_neighbors.push(n);
+					else
+						dns_neighbors.push(n);
+				}
+
+
+				var label_compare = function(a, b) {
+					return a.label.localeCompare(b.label);
+				}
+
+				dns_neighbors.sort(label_compare);
+				ip_neighbors.sort(label_compare);
+
+				var sorted_neighbors = dns_neighbors.concat(ip_neighbors);
+
+				
+				var html =
+					'<h2>' + name + '</h2>' +
+					ip + '<br>' +
+					'<br>' +
+					'<strong>Version:</strong> ' + version + '<br>' +
+					'<strong>Connections:</strong> ' + active_connections + ' / ' + connections + '<br>' +
+					//'<br>' +
+					'<strong>Neighbors - peers:</strong><br><div>' +
+					sorted_neighbors.map(function (n) {
+						return '<a href="#' + n.id + '">' + n.label + '</a> - ' + n.attr.neighbors.length + '';
+					}).join('<br>') +
+					'</div>';
+
+				$('#node-info').html(html);
+			}
+		</script>
+	</body>
+</html>
