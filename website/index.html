@@ -6,6 +6,7 @@
 		<script src="sigma.min.js"></script>
 		<script src="sigma.parseGexf.js"></script>
 		<script src="jquery-2.0.3.min.js"></script>
+		<script src="jquery.autocomplete.min.js"></script>
 		<style type="text/css">
 			* {
 				margin: 0;
@@ -14,17 +15,15 @@
 			html, body {
 				width: 100%;
 				height: 100%;
-				margin: 0;
-				padding: 0;
 				background: #333;
+				font-family: Verdana;
+				color: #FFF;
 			}
 
 			#general-info {
 				position: absolute;
 				top: 0;
 				left: 0;
-				color: #FFF;
-				font-family: Verdana;
 				font-size: 10px;
 				padding: 5px;
 				line-height: 150%;
@@ -35,16 +34,27 @@
 			#sidebar {
 				padding: 20px 20px;
 				background: rgba(0, 0, 0, 0.8);
-				color: #fff;
 				position: absolute;
 				top: 0;
 				right: 0;
 				bottom: 0;
+				min-width: 250px;
 				z-index: 999;
 				overflow-y: scroll;
 				font-size: 12px;
-				
-				font-family: 'Source Code Pro', Consolas, monospace;
+			}
+
+			#search-wrapper {
+				width: 100%;
+				margin-bottom: 20px;
+			}
+			#search-box {
+				width: 100%;
+				padding: 5px;
+				outline: none;
+				border: none;
+				margin: -5px;
+				font-size: inherit;
 			}
 
 			a {
@@ -56,7 +66,6 @@
 			}
 
 			h2 {
-				font-family: 'Verdana';
 				text-align: center;
 				margin-bottom: 5px;
 				color: #29BBFF;
@@ -70,10 +79,32 @@
 				text-align: right;
 			}
 
-			strong {
-				font-family: 'Verdana';
+			#node-info strong {
 				color: #29BBFF;
 				letter-spacing: 1px;
+			}
+
+			.tt {
+				font-family: 'Source Code Pro', Consolas, monospace;
+				font-size: 12px;
+			}
+
+			.autocomplete-suggestions {
+				font-family: 'Source Code Pro', Consolas, monospace;
+				font-size: 12px;
+				border: 1px solid #FFF;
+				background: #FFF;
+				overflow: auto;
+				color: #555;
+			}
+			.autocomplete-suggestion {
+				padding: 2px 5px;
+				white-space: nowrap;
+				overflow: hidden;
+			}
+			.autocomplete-selected { background: #7FD6FF; }
+			.autocomplete-suggestions strong {
+				color: #000000;
 			}
 		</style>
 	</head>
@@ -85,7 +116,13 @@
 			Number of nodes: <span id="number-of-nodes">-</span>
 		</div>
 		<div id="sidebar">
-			<div id="node-info"></div>
+			<div id="search-wrapper">
+				<input id="search-box" class="tt" type="text" placeholder="Search nodes...">
+			</div>
+			<div id="node-info">
+				<!-- Ugly hack to stretch the sidebar to right size -->
+				<span class="tt" style="opacity: 0">0000:0000:0000:0000:0000:0000:0000:0000</span>
+			</div>
 		</div>
 		<div id="map" style="width:100%; height:100%"></div>
 
@@ -120,7 +157,7 @@
 					maxEdgeSize: 2
 				});
 
-				sigInst.parseGexf('network-processed.gexf.xml');
+				sigInst.parseGexf('network-processed.gexf');
 				searchNeighbors();
 
 				
@@ -172,6 +209,37 @@
 				$(document).on('click', '#node-info a', function(e) {
 					var id = e.target.hash.substring(1);
 					selectNode(id);
+				});
+
+				var searchArray = [];
+				sigInst.iterNodes(function(n) {
+					var name = n.label;
+					var ip = n.id;
+					
+					searchArray.push({
+						value: name,
+						data: ip
+					});
+
+					searchArray.push({
+						value: ip,
+						data: ip
+					});
+				});
+
+				$('#search-box').autocomplete({
+					lookup: searchArray,
+					autoSelectFirst: true,
+					lookupLimit: 7,
+					onSelect: function(suggestion) {
+						selectNode(suggestion.data);
+					}
+				});
+
+				$('#search-box').keypress(function(e) {
+					if (e.which == 13) {
+						selectNode($('#search-box').val());
+					}
 				});
 			});
 
@@ -329,7 +397,7 @@
 				
 				var html =
 					'<h2>' + name + '</h2>' +
-					ip + '<br>' +
+					'<span class="tt">' + ip + '</span><br>' +
 					'<br>' +
 					'<strong>Version:</strong> ' + version + '<br>' +
 					'<strong>Connections:</strong> ' + active_connections + ' / ' + connections + '<br>' +
@@ -337,7 +405,7 @@
 					'<table>' +
 					'<tr><td><strong>Neighbors</strong></td><td><strong>Peers</strong></td></tr>' +
 					sorted_neighbors.map(function (n) {
-						return '<tr><td><a href="#' + n.id + '">' + n.label + '</a></td><td>' + n.attr.neighbors.length + '</td></tr>';
+						return '<tr><td><a href="#' + n.id + '" class="tt">' + n.label + '</a></td><td>' + n.attr.neighbors.length + '</td></tr>';
 					}).join('') +
 					'</table>';
 
