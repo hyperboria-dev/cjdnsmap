@@ -3,10 +3,12 @@
 WEBSITE_DIR=website
 
 
-python gexf_output.py network.gexf
+python gexf_output.py network.gexf &
+cpulimit -p $! -l 20
 
 cd force-atlas
-java -cp /usr/share/java/org-openide-util-lookup.jar:.:gephi-toolkit-0.8.7-all/gephi-toolkit.jar Atlas ../network.gexf ../network-processed.gexf
+java -cp /usr/share/java/org-openide-util-lookup.jar:.:gephi-toolkit-0.8.7-all/gephi-toolkit.jar Atlas ../network.gexf ../network-processed.gexf &
+cpulimit -p $! -l 20
 cd ..
 
 
