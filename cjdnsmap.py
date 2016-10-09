@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 #
-# cjdnsmap.py (c) 2012 Gerard Krol
+# original - cjdnsmap.py (c) 2012 Gerard Krol
+# modified - cjdnsmap.py - 2014 Randati
 #
 # You may redistribute this program and/or modify it under the terms of
 # the GNU General Public License as published by the Free Software Foundation,
@@ -14,120 +15,19 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Todo:
-# - Color nodes depending on the number of connections
-#
 
-import pydot
-import re
-import socket
+from cjdns import cjdns_connect, cjdns_connectWithAdminInfo
 import httplib2
-import sys
-import math
-
-#################################################
-# code from http://effbot.org/zone/bencode.htm
-# Fredrik Lundh 
-#
-# Unless otherwise noted, source code can be be used freely. Examples, 
-# test scripts and other short code fragments can be considered as 
-# being in the public domain. Downloads usually include a README file 
-# that includes the relevant copyright/license information.
-
-def tokenize(text, match=re.compile("([idel])|(\d+):|(-?\d+)").match):
-    i = 0
-    while i < len(text):
-        m = match(text, i)
-        s = m.group(m.lastindex)
-        i = m.end()
-        if m.lastindex == 2:
-            yield "s"
-            yield text[i:i+int(s)]
-            i = i + int(s)
-        else:
-            yield s
-
-def decode_item(next, token):
-    if token == "i":
-        # integer: "i" value "e"
-        data = int(next())
-        if next() != "e":
-            raise ValueError
-    elif token == "s":
-        # string: "s" value (virtual tokens)
-        data = next()
-    elif token == "l" or token == "d":
-        # container: "l" (or "d") values "e"
-        data = []
-        tok = next()
-        while tok != "e":
-            data.append(decode_item(next, tok))
-            tok = next()
-        if token == "d":
-            data = dict(zip(data[0::2], data[1::2]))
-    else:
-        raise ValueError
-    return data
-
-def decode(text):
-    try:
-        src = tokenize(text)
-        data = decode_item(src.next, src.next())
-        for token in src: # look for more tokens
-            raise SyntaxError("trailing junk")
-    except (AttributeError, ValueError, StopIteration):
-        raise SyntaxError("syntax error")
-    return data
-
-# end code from http://effbot.org/zone/bencode.htm
-###################################################
-
-###################################################
-def hsv_to_rgb(h,s,v):
-    """ convert hsv to rgb. h is 0-360, s and v are 0-1"""
-    r = 0.0
-    g = 0.0
-    b = 0.0
-    chroma = v * s
-    h_dash = h / 60.0
-    x = chroma * (1.0 - math.fabs((h_dash % 2.0) - 1.0))
- 
-    if h_dash < 1.0:
-        r = chroma
-        g = x
-    elif h_dash < 2.0:
-        r = x
-        g = chroma
-    elif h_dash < 3.0:
-        g = chroma
-        b = x
-    elif h_dash < 4.0:
-        g = x
-        b = chroma
-    elif h_dash < 5.0:
-        r = x
-        b = chroma
-    elif h_dash < 6.0:
-        r = chroma
-        b = x
- 
-    m = v - chroma
-    r += m
-    g += m
-    b += m
-    return (r,g,b)
-    
-def hsv_to_color(h,s,v):
-    r,g,b = hsv_to_rgb(h,s,v)
-    return '#{0:02x}{1:02x}{2:02x}'.format(int(r*255),int(g*255),int(b*255))
-
-###################################################
+import json
 
 
-class route:
-    def __init__(self, ip, name, path, link):
+class Route:
+    def __init__(self, ip, link, path, version):
         self.ip = ip
-        self.name = name
+        self.link = link
+        self.path = path
+        self.version = version
+
         route = path
         route = route.replace('.','')
         route = route.replace('0','x')
@@ -149,204 +49,153 @@ class route:
         route = route.replace('y','0001')
         route = route.replace('x','0000')
         self.route = route[::-1].rstrip('0')[:-1]
-        self.quality = link / 536870.0 # LINK_STATE_MULTIPLIER
-        
+        self.quality = link / 5366870.0 # LINK_STATE_MULTIPLIER
+
     def find_parent(self, routes):
-        parents = [(len(other.route),other) for other in routes if self.route.startswith(other.route) and self != other]
+        def is_parent(other):
+            return self.route.startswith(other.route) and self != other
 
-        parents.sort(reverse=True)
-        if parents:
-            parent = parents[0][1]
-            return parent
-        return None
-        
-if len(sys.argv) > 1:
-    filename = sys.argv[-1]
-else:
-    filename = 'map.png'
-        
-# retrieve the node names from the page maintained by ircerr
-page = 'http://[fc38:4c2c:1a8f:3981:f2e7:c2b9:6870:6e84]/ipv6-cjdnet.data.txt'
-print('Downloading the list of node names from {0} ...'.format(page))
-names = {}
-h = httplib2.Http(".cache")
-r, content = h.request(page, "GET")
+        parents = filter(is_parent, routes)
+        if not parents: return None
 
-existing_names = set()
-doubles = set()
-nameip = []
-for l in content.split('\n'):
-    l = l.strip()
-    if not l or l.startswith('#'):
-        continue
-    d = l.split(' ')
-    if len(d) < 2:
-        continue # use the standard last two bytes
-    ip   = d[0]
-    name = d[1]
-    nameip.append((name,ip))
-    if name in existing_names:
-        doubles.add(name)
-    existing_names.add(name)
-    
-for name,ip in nameip:
-    if not name in doubles:
-        names[ip]=name
-    else:
-        names[ip]=name + ' ' + ip.split(':')[-1]
+        return max(parents, key=lambda r: len(r.route))
 
-# retrieve the routing data from the admin interface
-# FIXME: read these from the commandline or even from the config
-HOST = 'localhost'
-PORT = 11234
-print('Retrieving the routing table from the admin interface at {0} port {1}'.format(HOST,PORT))
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect((HOST, PORT))
-s.send('d1:q19:NodeStore_dumpTable4:txid4:....e')
-data = ''
-while True:
-    r = s.recv(1024)
-    data += r
-    if not r or r.endswith('....e\n'):
-        break
-s.shutdown(socket.SHUT_RDWR)
-s.close()
-data = data.strip()
-bencode = decode(data)
 
-routes = []
-for r in bencode['routingTable']:
-    ip = r['ip']
-    path = r['path']
-    link = r['link']
-    if ip in names:
-        name = names[ip]
-    else:
-        name = ip.split(':')[-1]
-    r = route(ip,name,path,link)
-    routes.append(r)
-        
-# sort the routes on quality
-tmp = [(r.quality,r) for r in routes]
-tmp.sort(reverse=True)
-routes = [q[1] for q in tmp]
+    def __repr__ (self):
+        return "%s(%r)" % (self.__class__, self.__dict__)
 
-family_set = set()
-family_list = []
-class MyNode:
-    def __init__(self, name):
-        self.name = name
+
+
+class Node:
+    def __init__(self, route):
+        self.ip = route.ip
+        self.version = int(route.version)
+        self.name = self.ip.split(':')[-1]
+
         self.connections = 0
         self.active_connections = 0
-        p = self.name.split('.')
-        if len(p) == 1:
-            self.family = None
-        else:
-            self.family = '.'.join(p[1::])
-            if not self.family in family_set:
-                family_set.add(self.family)
-                family_list.append(self.family)
-    def Node(self):
-        if self.active_connections:
-            color = 'black'
-            if self.name in existing_names:
-                fontcolor = 'black'
-            else:
-                fontcolor = 'black'
-            if not self.family:
-                fillcolor = 'white'
-            else:
-                h = family_hues[self.family]
-                s = 0.3
-                v = 1.0
-                fillcolor = hsv_to_color(h,s,v)
-        else:
-            if not self.family:
-                h = 0.0
-                s = 0.0
-                v = 0.6
-            else:
-                h = family_hues[self.family]
-                s = 0.5
-                v = 0.7
-            color = hsv_to_color(h,s,v)
-            fontcolor = color
-            fillcolor = 'white'
-        self.node = pydot.Node(self.name, shape='box', color=color, fontcolor=fontcolor, style='filled', fillcolor=fillcolor)
-        return self.node
-        
-family_hues = {}
-def calculate_family_hues():
-    family_list.sort() # so they get the same color every time
-    for i,f in enumerate(family_list):
-        family_hues[f] = 360.0/len(family_list)*i
 
-nodes = {}
-for r in routes:
-    if not r.ip in nodes:
-        nodes[r.ip] = MyNode(r.name)
+    def __repr__ (self):
+        return "%s(%r)" % (self.__class__, self.__dict__)
 
-# we need to find the parents for every node and draw a line
-# to do this we take the route and find the node with the longest
-# overlap at the end
-# we then assume this is the parent
+class Edge:
+    def __init__(self, parent_node, node, quality):
+        self.parent_node = parent_node
+        self.node = node
+        self.quality = quality
 
-link_strength = {}
-def linked(a,b):
-    a,b = sorted([a,b])
-    return (a,b) in link_strength
-def set_link_strength(a,b,s):
-    a,b = sorted([a,b])
-    if not linked(a,b):
-        link_strength[(a,b)] = s
-    else:
-        l = link_strength[(a,b)]
-        if s > l:
-            link_strength[(a,b)] = s
+    def __repr__ (self):
+        return "%s(%r)" % (self.__class__, self.__dict__)
 
-edges = []
-def add_edges(active,color):
+
+
+
+def get_routes(cjdns):
+    routes = []
+    i = 0
+
+    while True:
+        table = cjdns.NodeStore_dumpTable(i)
+
+        for r in table['routingTable']:
+            route = Route(r['ip'], r['link'], r['path'], r['version'])
+            routes.append(route)
+
+        if not 'more' in table:
+            break
+
+        i += 1
+    return routes
+
+def sort_routes_on_quality(routes):
+    tmp = [(r.quality,r) for r in routes]
+    tmp.sort(reverse=True)
+    return [q[1] for q in tmp]
+
+
+def get_nodes(routes):
+    nodes = {}
     for r in routes:
-        if active and r.quality == 0:
-            continue
-        if not active and r.quality > 0:
-            continue
+        if not r.ip in nodes:
+            nodes[r.ip] = Node(r)
+    return nodes
+
+
+def get_edges(routes, nodes):
+    link_strengths = {}
+
+    def is_linked(a, b):
+        a, b = sorted([a, b])
+        return (a, b) in link_strengths
+
+    def set_link_strength(a, b, strength):
+        a, b = sorted([a, b])
+        if not is_linked(a, b):
+            link_strengths[(a, b)] = strength
+        else:
+            old_strength = link_strengths[(a, b)]
+            if strength > old_strength:
+                link_strengths[(a, b)] = strength
+
+    edges = []
+
+    for r in routes:
         parent = r.find_parent(routes)
-        if parent:
-            pn = nodes[parent.ip]
-            rn = nodes[r.ip]
-            if not linked(pn,rn):
-                pn.connections += 1
-                rn.connections += 1
-                if active:
-                    weight = '1'
-                    pn.active_connections += 1
-                    rn.active_connections += 1
-                else:
-                    weight = '0.01'
-                edges.append((pn,rn,weight,color,r.quality))
-            set_link_strength(pn,rn,r.quality)
-add_edges(True,'black')
-add_edges(False,'grey')
+        if not parent: continue
 
-graph = pydot.Dot(graph_type='graph', K='2', splines='true', dpi='50', maxiter='10000', ranksep='2', nodesep='1', epsilon='0.1', overlap='true')
-calculate_family_hues()
-for n in nodes.itervalues():
-    graph.add_node(n.Node())
-for pn,rn,weight,color,quality in edges:
-    width = math.log(float(quality)+1)
-    if width < 1:
-        width = 1
-    style = 'setlinewidth({0})'.format(width)
-    len = '0.5'
-    minlen = '0.5'
-    if quality > 0:
-        len = str(6/width)
-    if pn.connections == 1 or rn.connections == 1:
-        weight = '1'
-    edge = pydot.Edge(pn.node,rn.node, color=color, len=len, weight=weight, minlen=minlen, style=style)
-    graph.add_edge(edge)
+        parent_node = nodes[parent.ip]
+        node = nodes[r.ip]
 
-print('Generating the map...')
-graph.write_png(filename, prog='fdp') # dot neato twopi fdp circo
-print('Map written to {0}'.format(filename))
+        if not is_linked(parent_node, node):
+            parent_node.connections += 1
+            node.connections += 1
+
+            if r.quality > 0:
+                parent_node.active_connections += 1
+                node.active_connections += 1
+
+            edges.append(Edge(parent_node, node, r.quality))
+
+        set_link_strength(parent_node, node, r.quality)
+
+    return edges
+
+
+
+
+def download_node_names():
+    print "Downloading names"
+    page = 'http://[fc5d:baa5:61fc:6ffd:9554:67f0:e290:7535]/nodes/list.json'
+
+    names = {}
+    h = httplib2.Http(".cache")
+    try:
+        r, content = h.request(page, "GET")
+        nameip = json.loads(content)['nodes']
+    except:
+        print "Connection to Mikey's nodelist failed, continuing without names"
+        nameip = {}
+
+    return nameip
+
+def update_names(node_names, nodes):
+    for nameip in node_names:
+        if nameip['ip'] in nodes:
+            nodes[nameip['ip']].name = nameip['name'] 
+
+
+def get_map():
+    try:
+        cjdns = cjdns_connect(cjdadmin_ip, cjdadmin_port, cjdadmin_pass)
+    except:
+        cjdns = cjdns_connectWithAdminInfo()
+    
+    routes = get_routes(cjdns)
+    routes = sort_routes_on_quality(routes)
+    nodes = get_nodes(routes)
+    edges = get_edges(routes, nodes)
+
+    node_names = download_node_names()
+    update_names(node_names, nodes)
+
+    return nodes.values(), edges
